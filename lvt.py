@@ -742,6 +742,12 @@ class LiveTranslator:
         self._sentence_buffer = ""
         self._sentence_buffer_time = None  # time when buffer was last updated
 
+        # Recent translated phrases for dedup (last 5 outputs)
+        self._recent_phrases: collections.deque = collections.deque(maxlen=5)
+
+        # Recent Italian segments for dedup (last 5 inputs)
+        self._recent_italian: collections.deque = collections.deque(maxlen=5)
+
         # Session statistics
         self.session_start = datetime.now()
         self.phrase_count = 0
@@ -945,8 +951,24 @@ class LiveTranslator:
         separator_printed = False
         chunk_italian = []
         for segment in segments:
+            # Drop hallucinated segments: Whisper loops on silence/noise
+            # no_speech_prob > 0.6 means Whisper is not confident speech was heard
+            # compression_ratio > 2.4 means the output is suspiciously repetitive
+            if getattr(segment, 'no_speech_prob', 0.0) > 0.6:
+                continue
+            if getattr(segment, 'compression_ratio', 1.0) > 2.4:
+                continue
             text_it = segment.text.strip()
             if text_it and len(text_it) > 3:
+                # Skip entire segment if identical to a recently seen one
+                text_it_norm = text_it.lower()
+                if text_it_norm in self._recent_italian:
+                    continue
+                self._recent_italian.append(text_it_norm)
+
+                # Remove Whisper loop artefacts within the segment text
+                text_it = self._clean_hallucination_loops(text_it)
+
                 chunk_italian.append(text_it)
                 if not separator_printed:
                     print("─" * 50, flush=True)
@@ -982,6 +1004,22 @@ class LiveTranslator:
             combined = " ".join(chunk_italian)
             self._whisper_context = (self._whisper_context + " " + combined)[-200:].lstrip()
     
+    @staticmethod
+    def _clean_hallucination_loops(text: str) -> str:
+        """Remove Whisper loop artefacts: phrases repeated 3+ times in a row.
+
+        Whisper sometimes generates 'X, X, X, X...' when it loses track of
+        the audio. Three or more consecutive repetitions of the same clause
+        (separated by commas) are collapsed to a single occurrence.
+        Two repetitions are kept — they may be intentional emphasis.
+        """
+        return re.sub(
+            r'(\b\w[\w\'\s]{2,40}?)(?:,\s*\1){2,}',
+            r'\1',
+            text,
+            flags=re.IGNORECASE,
+        ).strip()
+
     def _translate_and_display(self, text_it, skip_italian=False):
         """Translate Italian text and display/save"""
         # Step 1: it → en (always needed)
@@ -992,6 +1030,12 @@ class LiveTranslator:
             text_target = text_en
         else:
             text_target = argostranslate.translate.translate(text_en, "en", self.target_lang)
+
+        # Skip exact duplicate of any recently displayed phrase (Whisper loop guard)
+        text_target_norm = text_target.strip().lower()
+        if text_target_norm in self._recent_phrases:
+            return
+        self._recent_phrases.append(text_target_norm)
 
         # Get timestamp and flag
         timestamp = datetime.now().strftime('%H:%M:%S')
