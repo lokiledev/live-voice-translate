@@ -6,6 +6,10 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "argostranslate>=1.9.6",
+    "glfw>=2.7",
+    "pillow>=10",
+    "pyopengl>=3.1",
+    "python-xlib>=0.33; sys_platform == 'linux'",
     "faster-whisper>=1.1.0",
     "numpy>=2.0",
     # CTranslate2 wheels link against CUDA 12 cuBLAS

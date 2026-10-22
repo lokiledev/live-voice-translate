@@ -22,7 +22,9 @@ Author: Stéphane de Labrusse
 import argparse
 import collections
 import json
+import os
 import queue
+from pathlib import Path
 import re
 import select
 import subprocess
@@ -325,16 +327,42 @@ class AudioCapture:
         ]
 
     @staticmethod
-    def get_active_streams():
-        """Return (id, node name, description) for sinks that are playing audio."""
+    def _pw_dump():
         try:
             result = subprocess.run(
                 ["pw-dump"],
                 capture_output=True, text=True, check=True,
             )
-            objects = json.loads(result.stdout)
+            return json.loads(result.stdout)
         except (subprocess.CalledProcessError, FileNotFoundError, json.JSONDecodeError):
             return []
+
+    @staticmethod
+    def get_default_sink():
+        """Return (id, node name, description) of the default output device, or None."""
+        objects = AudioCapture._pw_dump()
+        default_name = None
+        for obj in objects:
+            if obj.get("type") != "PipeWire:Interface:Metadata":
+                continue
+            for entry in obj.get("metadata", []):
+                if entry.get("key") == "default.audio.sink":
+                    default_name = (entry.get("value") or {}).get("name")
+        for obj in objects:
+            if obj.get("type") != "PipeWire:Interface:Node":
+                continue
+            props = obj.get("info", {}).get("props", {})
+            if props.get("media.class") != "Audio/Sink":
+                continue
+            name = props.get("node.name", "")
+            if default_name is None or name == default_name:
+                return str(obj["id"]), name, props.get("node.description") or name
+        return None
+
+    @staticmethod
+    def get_active_streams():
+        """Return (id, node name, description) for sinks that are playing audio."""
+        objects = AudioCapture._pw_dump()
 
         nodes = {}
         for obj in objects:
@@ -494,13 +522,289 @@ class TranscriptWriter:
             print(f"\n💾 Transcript saved to: {self.filepath}")
 
 
+class Overlay:
+    """Always-on-top window showing the last sentence: source on top, translation below.
+
+    The panel background is half transparent and the text stays opaque. Drag
+    anywhere except the close mark; the window manager performs the move.
+    """
+
+    WIDTH = 920
+    HEIGHT = 240
+    # (path, face index) candidates; the font must cover both CJK and Latin glyphs.
+    _FONTS = (
+        ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 2),  # Noto Sans CJK SC
+        ("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", 2),
+        ("/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc", 2),
+        ("/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf", 0),
+    )
+    _MAX_FONT_SIZE = 30
+    _MIN_FONT_SIZE = 14
+    _PADDING = 20
+
+    def __init__(self):
+        self._source = ""
+        self._target = ""
+        self._font_file = next(
+            ((path, index) for path, index in self._FONTS if Path(path).is_file()),
+            None,
+        )
+        self._closed = False
+        self._glfw = None
+        self._gl = None
+        self._window = None
+        self._texture = None
+        self._texture_key = None
+        # Set by the translator: on_key(char) handles a shortcut pressed while
+        # the overlay has focus; status() returns (mode, paused) for the footer.
+        self.on_key = None
+        self.status = None
+
+    def open(self):
+        # GLFW can only move and composite a transparent window through X11.
+        os.environ.pop("WAYLAND_DISPLAY", None)
+        import glfw
+        from OpenGL import GL
+
+        self._glfw = glfw
+        self._gl = GL
+        glfw.init_hint(glfw.PLATFORM, glfw.PLATFORM_X11)
+        if not glfw.init():
+            raise RuntimeError("GLFW failed to initialize")
+
+        glfw.window_hint(glfw.DECORATED, glfw.FALSE)
+        glfw.window_hint(glfw.FLOATING, glfw.TRUE)
+        glfw.window_hint(glfw.FOCUS_ON_SHOW, glfw.FALSE)
+        glfw.window_hint(glfw.TRANSPARENT_FRAMEBUFFER, glfw.TRUE)
+        self._window = glfw.create_window(
+            self.WIDTH, self.HEIGHT, "live-voice-translate", None, None,
+        )
+        if self._window is None:
+            glfw.terminate()
+            raise RuntimeError("Could not create the overlay window")
+
+        glfw.make_context_current(self._window)
+        glfw.swap_interval(1)
+        glfw.set_mouse_button_callback(self._window, self._on_mouse)
+        glfw.set_key_callback(self._window, self._on_key)
+        video = glfw.get_video_mode(glfw.get_primary_monitor())
+        screen_h = video.size[1] if video is not None else 1080
+        glfw.set_window_pos(self._window, 40, max(40, screen_h - self.HEIGHT - 80))
+        self.pump()
+
+    def push(self, source, target):
+        source = " ".join(source.split())
+        target = " ".join(target.split())
+        if source or target:
+            self._source, self._target = source, target
+
+    def pump(self):
+        """Draw one frame. Return False when the window has been closed."""
+        glfw = self._glfw
+        if glfw is None or self._window is None or self._closed:
+            self._closed = True
+            return False
+        glfw.poll_events()
+        if glfw.window_should_close(self._window):
+            self._closed = True
+            return False
+        self._draw()
+        glfw.swap_buffers(self._window)
+        return True
+
+    def close(self):
+        glfw = self._glfw
+        self._closed = True
+        if glfw is not None and self._window is not None:
+            glfw.destroy_window(self._window)
+            glfw.terminate()
+        self._window = None
+        self._glfw = None
+
+    def _shown_text(self):
+        if not (self._source or self._target):
+            return "Waiting for speech…", ""
+        return self._source, self._target
+
+    def _font(self, size):
+        from PIL import ImageFont
+
+        if self._font_file is None:
+            return ImageFont.load_default(size)
+        path, index = self._font_file
+        return ImageFont.truetype(path, size, index=index)
+
+    def _fit(self, draw, text, max_width, max_height):
+        """Largest font whose wrapped text fits the box, with its lines and line height."""
+        for size in range(self._MAX_FONT_SIZE, self._MIN_FONT_SIZE - 1, -2):
+            font = self._font(size)
+            lines = _wrap_text(draw, text, font, max_width)
+            line_height = int(size * 1.35)
+            if len(lines) * line_height <= max_height:
+                return font, lines, line_height
+        max_lines = max(1, max_height // line_height)
+        return font, lines[-max_lines:], line_height
+
+    def _on_key(self, window, key, scancode, action, mods):
+        """Forward letter shortcuts typed into the overlay to the translator."""
+        glfw = self._glfw
+        if action != glfw.PRESS or self.on_key is None:
+            return
+        name = glfw.get_key_name(key, scancode)
+        if name and len(name) == 1 and name.isalpha():
+            self.on_key(name.lower())
+
+    def _status_line(self):
+        if self.status is None:
+            return ""
+        mode, paused = self.status()
+        state = "PAUSED" if paused else f"mode: {mode}"
+        return f"{state}    M mode   P pause   Q quit"
+
+    def _on_mouse(self, window, button, action, mods):
+        glfw = self._glfw
+        if button != glfw.MOUSE_BUTTON_LEFT or action != glfw.PRESS:
+            return
+        width, _height = glfw.get_window_size(window)
+        x_pos, y_pos = glfw.get_cursor_pos(window)
+        if x_pos >= width - 42 and y_pos <= 42:
+            glfw.set_window_should_close(window, True)
+            return
+        self._begin_move(x_pos, y_pos)
+
+    def _begin_move(self, x_pos, y_pos):
+        """Ask the window manager to drag the window from this click."""
+        glfw = self._glfw
+        xid = glfw.get_x11_window(self._window)
+        if not xid:
+            return
+        origin_x, origin_y = glfw.get_window_pos(self._window)
+        from Xlib import X, display
+        from Xlib.protocol.event import ClientMessage
+
+        dpy = display.Display()
+        window = dpy.create_resource_object("window", xid)
+        atom = dpy.intern_atom("_NET_WM_MOVERESIZE")
+        message = ClientMessage(
+            window=window,
+            client_type=atom,
+            data=(32, [int(origin_x + x_pos), int(origin_y + y_pos), 8, 1, 1]),
+        )
+        dpy.screen().root.send_event(
+            message,
+            event_mask=X.SubstructureRedirectMask | X.SubstructureNotifyMask,
+        )
+        dpy.flush()
+
+    def _draw(self):
+        GL = self._gl
+        glfw = self._glfw
+        width, height = glfw.get_framebuffer_size(self._window)
+        GL.glViewport(0, 0, width, height)
+        GL.glClearColor(0.0, 0.0, 0.0, 0.5)
+        GL.glClear(GL.GL_COLOR_BUFFER_BIT)
+        self._draw_text(width, height)
+
+    def _draw_text(self, width, height):
+        GL = self._gl
+        key = (self._shown_text(), self._status_line(), width, height)
+        if key != self._texture_key:
+            self._upload_text(width, height)
+            self._texture_key = key
+        if self._texture is None:
+            return
+
+        GL.glEnable(GL.GL_TEXTURE_2D)
+        GL.glEnable(GL.GL_BLEND)
+        GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, self._texture)
+        GL.glColor4f(1.0, 1.0, 1.0, 1.0)
+        GL.glMatrixMode(GL.GL_PROJECTION)
+        GL.glLoadIdentity()
+        GL.glOrtho(0, width, height, 0, -1, 1)
+        GL.glMatrixMode(GL.GL_MODELVIEW)
+        GL.glLoadIdentity()
+        GL.glBegin(GL.GL_QUADS)
+        GL.glTexCoord2f(0, 0); GL.glVertex2f(0, 0)
+        GL.glTexCoord2f(1, 0); GL.glVertex2f(width, 0)
+        GL.glTexCoord2f(1, 1); GL.glVertex2f(width, height)
+        GL.glTexCoord2f(0, 1); GL.glVertex2f(0, height)
+        GL.glEnd()
+
+    def _upload_text(self, width, height):
+        image = self._render(width, height)
+        GL = self._gl
+        if self._texture is None:
+            self._texture = GL.glGenTextures(1)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, self._texture)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_LINEAR)
+        GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR)
+        GL.glTexImage2D(
+            GL.GL_TEXTURE_2D, 0, GL.GL_RGBA, width, height, 0,
+            GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, image.tobytes(),
+        )
+
+    def _render(self, width, height):
+        """Draw the text panel into a transparent RGBA image."""
+        from PIL import Image, ImageDraw
+
+        image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(image)
+        pad = self._PADDING
+        status = self._status_line()
+        footer_h = 30 if status else 0
+        half = (height - footer_h) // 2
+        text_width = width - 2 * pad - 30  # leave room for the close mark
+        source, target = self._shown_text()
+
+        halves = (
+            (source, 0, (150, 230, 160, 255)),
+            (target, half, (255, 255, 255, 255)),
+        )
+        for text, top, color in halves:
+            if not text:
+                continue
+            font, lines, line_height = self._fit(draw, text, text_width, half - 2 * pad)
+            y_pos = top + (half - len(lines) * line_height) // 2
+            for line in lines:
+                draw.text((pad, y_pos), line, font=font, fill=color)
+                y_pos += line_height
+
+        draw.line((pad, half, width - pad, half), fill=(255, 255, 255, 70), width=1)
+        draw.text((width - 32, 6), "×", font=self._font(24), fill=(255, 255, 255, 210))
+        if status:
+            paused = status.startswith("PAUSED")
+            color = (255, 200, 90, 255) if paused else (255, 255, 255, 150)
+            draw.text((pad, height - footer_h + 4), status, font=self._font(16), fill=color)
+        return image
+
+
+_WRAP_TOKEN_RE = re.compile(r'[\u3000-\u303f\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]|[^\s\u3000-\u303f\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]+|\s+')
+
+
+def _wrap_text(draw, text, font, max_width):
+    """Wrap at spaces for Latin text and between characters for Chinese."""
+    lines, current = [], ""
+    for token in _WRAP_TOKEN_RE.findall(text):
+        trial = current + token
+        if not current.strip() or draw.textlength(trial.rstrip(), font=font) <= max_width:
+            current = trial
+        else:
+            lines.append(current.rstrip())
+            current = token.lstrip()
+    if current.strip():
+        lines.append(current.rstrip())
+    return lines
+
+
 class LiveTranslator:
     """Main translation engine with keyboard control"""
     
-    def __init__(self, model_name, mode, save_file=None, enable_keyboard=True, show_chinese=False, vad_filter=True, use_gpu=False, mixed=False):
+    def __init__(self, model_name, mode, save_file=None, enable_keyboard=True, show_chinese=False, vad_filter=True, use_gpu=False, mixed=False, overlay=False):
         self.model_name = model_name
         self.mode = mode
         self.mixed = mixed
+        self.overlay = Overlay() if overlay else None
         self.config = ModelConfig.get_config(model_name, mode)
         self.writer = TranscriptWriter(save_file, model_name, mode)
         self.model = None
@@ -623,16 +927,32 @@ class LiveTranslator:
         in_speech = False
         silence_count = 0
 
-        try:
-            proc = subprocess.Popen(
+        def start_recorder():
+            return subprocess.Popen(
                 AudioCapture._record_command(source_name),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
             )
+
+        try:
+            proc = start_recorder()
             while not self.should_quit:
                 frame = proc.stdout.read(FRAME_BYTES)
                 if not frame or len(frame) < FRAME_BYTES:
-                    break
+                    # pw-record exited (device removed, PipeWire restarted...).
+                    # Keep listening: restart it instead of ending the session.
+                    proc.terminate()
+                    proc.wait()
+                    if self.should_quit:
+                        break
+                    print("\n⚠️  Audio capture stopped, reconnecting...", flush=True)
+                    time.sleep(1.0)
+                    in_speech = False
+                    voiced_frames = []
+                    ring_buffer.clear()
+                    silence_count = 0
+                    proc = start_recorder()
+                    continue
 
                 if self.paused:
                     in_speech = False
@@ -829,6 +1149,8 @@ class LiveTranslator:
         if text_target_norm in self._recent_phrases:
             return
         self._recent_phrases.append(text_target_norm)
+        if self.overlay:
+            self.overlay.push(text_it, text_target)
 
         # Get timestamp and flag
         timestamp = datetime.now().strftime('%H:%M:%S')
@@ -868,9 +1190,24 @@ class LiveTranslator:
             daemon=True
         )
         self.capture_thread.start()
+
+        if self.overlay:
+            try:
+                # Shortcuts also work when the overlay window has focus.
+                self.overlay.on_key = (self.keyboard_controller or KeyboardController(self)).handle_key
+                self.overlay.status = lambda: (self.mode, self.paused)
+                self.overlay.open()
+            except Exception as exc:
+                print(f"⚠️  Overlay failed to open: {exc}", flush=True)
+                self.overlay.close()
+                self.overlay = None
         
         try:
             while not self.should_quit:
+                if self.overlay and not self.overlay.pump():
+                    self.should_quit = True
+                    break
+
                 # Check keyboard input (fast, non-blocking)
                 if self.keyboard_controller:
                     key = self.keyboard_controller.get_key(timeout=0.01)
@@ -879,7 +1216,7 @@ class LiveTranslator:
                 
                 # Get audio from queue (non-blocking with timeout)
                 try:
-                    audio_data = self.audio_queue.get(timeout=0.1)
+                    audio_data = self.audio_queue.get(timeout=0.02 if self.overlay else 0.1)
                     self.process_audio(audio_data)
                 except queue.Empty:
                     # No audio ready yet, continue checking keyboard
@@ -890,6 +1227,8 @@ class LiveTranslator:
         finally:
             # Signal threads to stop
             self.should_quit = True
+            if self.overlay:
+                self.overlay.close()
 
             # Cleanup keyboard
             if self.keyboard_controller:
@@ -1008,6 +1347,7 @@ Examples:
   %(prog)s large --slow --save meeting.md
   %(prog)s turbo --show-chinese      # Display Chinese + English
   %(prog)s turbo --mixed             # Mixed Chinese/English speech
+  %(prog)s turbo --overlay           # Floating window: last sentence + translation
   %(prog)s medium --no-vad           # Disable Voice Activity Detection
 
 Audio source:
@@ -1078,6 +1418,12 @@ Keyboard shortcuts (during execution):
     )
 
     parser.add_argument(
+        "--overlay",
+        action="store_true",
+        help="Floating half-transparent window with the last sentence and its translation"
+    )
+
+    parser.add_argument(
         "--no-vad",
         action="store_true",
         help="Disable Whisper's internal VAD filter (webrtcvad chunking is always active)"
@@ -1133,16 +1479,22 @@ Keyboard shortcuts (during execution):
     print(f"  Language   : {source} → {TARGET_LABEL}")
     print(f"  Device     : {cuda_device_name() if use_gpu else 'CPU'}")
     print(f"  VAD        : {'Disabled' if args.no_vad else 'Enabled (skips silence)'}")
+    if args.overlay:
+        print("  Overlay    : Last sentence (source + translation)")
     print()
     
     # Detect audio streams
     streams = AudioCapture.get_active_streams()
     if not streams:
-        print("Error: No playing audio detected", file=sys.stderr)
-        print("Start audio in Chrome, then run this again.", file=sys.stderr)
-        sys.exit(1)
-
-    if len(streams) == 1:
+        # Nothing is playing yet: listen to the default output device and let
+        # the VAD wait for speech.
+        default_sink = AudioCapture.get_default_sink()
+        if default_sink is None:
+            print("Error: No PipeWire audio output device found", file=sys.stderr)
+            sys.exit(1)
+        _, stream_id, stream_desc = default_sink
+        stream_desc += " (no audio playing yet, waiting)"
+    elif len(streams) == 1:
         _, stream_id, stream_desc = streams[0]
     else:
         print("  Multiple audio streams detected:")
@@ -1175,6 +1527,7 @@ Keyboard shortcuts (during execution):
         mixed=args.mixed,
         vad_filter=not args.no_vad,
         use_gpu=use_gpu,
+        overlay=args.overlay,
     )
     translator.setup()
     translator.run(stream_id)

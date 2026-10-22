@@ -149,6 +149,9 @@ uv run lvt turbo --show-chinese
 # Mixed Chinese/English speech: Chinese is translated, English is shown as is
 uv run lvt turbo --mixed --show-chinese
 
+# Floating half-transparent window: last sentence on top, its translation below
+uv run lvt turbo --overlay
+
 # Disable Voice Activity Detection (transcribe everything including silence)
 uv run lvt medium --no-vad
 
@@ -304,7 +307,7 @@ uv run lvt large --slow
 
 ## Audio source selection
 
-The tool finds output devices that currently have playing audio, such as a Chrome tab. If only one device is playing, it is selected automatically. If several devices are playing, an interactive menu is displayed:
+The tool finds output devices that currently have playing audio, such as a Chrome tab. If only one device is playing, it is selected automatically. If nothing is playing yet, it listens to the default output device and waits for speech. If several devices are playing, an interactive menu is displayed:
 
 ```
   Multiple audio streams detected:
@@ -333,7 +336,7 @@ PipeWire internal loopback sinks are skipped.
 
 ## Troubleshooting
 
-### No active audio stream detected
+### Nothing gets transcribed
 
 ```bash
 # Show which applications are playing audio
