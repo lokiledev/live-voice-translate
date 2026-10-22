@@ -1,0 +1,61 @@
+# Adapted from gs-core. Print stays allowed: the terminal and overlay are the UI.
+# Ambiguous-unicode checks are off because transcripts, prompts, and comments
+# contain CJK punctuation that is not an ASCII lookalike by accident.
+
+line-length = 100
+src = ["src"]
+target-version = "py312"
+
+[lint]
+preview = true
+explicit-preview-rules = true
+select = [
+  "ANN",
+  "ASYNC",
+  "B",
+  "D",
+  "E",
+  "F",
+  "G",
+  "I",
+  "ICN",
+  "INP",
+  "N",
+  "PGH",
+  "PIE",
+  "PLC0414",
+  "PLC0415",
+  "PLR0402",
+  "RUF",
+  "SLF",
+  "T100",
+  "TID",
+  "UP",
+  "W",
+]
+ignore = [
+  "D100",
+  "D101",
+  "D102",
+  "D103",
+  "D104",
+  "D105",
+  "D106",
+  "D107",
+  "D417",
+  "E501",
+  "RUF001",
+  "RUF002",
+  "RUF003",
+]
+
+[lint.per-file-ignores]
+"src/live_voice_translate/native.py" = [
+  "E402", # Third-party native libraries are imported after install().
+]
+
+[lint.pydocstyle]
+convention = "google"
+
+[format]
+quote-style = "double"

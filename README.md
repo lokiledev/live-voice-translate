@@ -30,7 +30,7 @@ After months of refining it for personal use, I realized this could help other d
 
 ...this tool can make your life significantly easier.
 
-It demonstrates that complex problems don't always need complex solutions — 
+It demonstrates that complex problems don't always need complex solutions —
 sometimes a straightforward Python script is all you need.
 
 **Buon lavoro!** 🚀
@@ -106,7 +106,7 @@ uv sync
 uv run lvt
 ```
 
-`uv sync` installs `faster-whisper`, `argostranslate`, and `webrtcvad` into `.venv`.
+`uv sync` installs the application and the `dev` dependency group (Ruff, ty, and pre-commit) into `.venv`. Use `uv sync --no-dev` to install only what `lvt` needs to run.
 
 ### 3. Updating
 
@@ -114,6 +114,17 @@ uv run lvt
 cd live-voice-translate
 git pull origin main
 uv sync
+```
+
+### 4. Development
+
+The translator is the `live_voice_translate` package under `src/`. `lvt` is a thin console script. The dev tools are the `dev` dependency group, and pre-commit runs them:
+
+```bash
+uv run pre-commit install   # once per clone
+uv run ruff check
+uv run ruff format
+uv run ty check
 ```
 
 ## Usage
