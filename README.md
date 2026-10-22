@@ -1,10 +1,22 @@
 # live-voice-translate
 
-Real-time Italian→English, French, Spanish, German audio translation using Whisper and Argos Translate.
+Real-time Chinese→English audio translation using Whisper and Argos Translate.
 
 Captures system audio (YouTube, video calls, etc.) and provides instant transcription and translation with interactive keyboard controls.
 
-## 🇮🇹 → 🇬🇧 Story behind this tool
+## 🇨🇳 → 🇬🇧 Chinese edition
+
+This fork is configured specifically for live Mandarin Chinese to English
+translation. It captures desktop audio, transcribes Mandarin with a multilingual
+Whisper model, then translates the Chinese transcript with Argos Translate's
+offline `zh→en` model.
+
+The recommended model is `large-v3-turbo`, downloaded automatically from
+[Hugging Face](https://huggingface.co/mobiuslabsgmbh/faster-whisper-large-v3-turbo).
+It offers a better real-time speed/accuracy tradeoff than `large-v3`.
+
+<details>
+<summary>Original project story</summary>
 
 As a French developer working remotely with [Nethesis](https://www.nethesis.it/) (an Italian company behind NethServer and NethSecurity), I found myself in daily Italian-language meetings and calls. Not speaking Italian fluently, I needed a practical solution to follow technical discussions in real-time.
 
@@ -23,20 +35,22 @@ sometimes a straightforward Python script is all you need.
 
 **Buon lavoro!** 🚀
 
+</details>
+
 ## Features
 
-- 🎤 **Real-time translation** - Italian to English, French, Spanish or German, phrase by phrase as the speaker finishes
-- 🎯 **5 Whisper models** - From tiny (fast) to large-v3 (accurate), switchable on-the-fly with **W**
+- 🎤 **Real-time translation** - Mandarin Chinese to English, phrase by phrase
+- 🎯 **6 Whisper models** - From tiny (fast) to large-v3 (accurate), including recommended large-v3-turbo
 - ⚡ **3 speed modes** - Fast (500ms)/Normal (800ms)/Slow (1200ms) silence thresholds, switchable on-the-fly with **M**
 - 🔇 **VAD-based chunking** - [webrtcvad](https://github.com/wiseman/py-webrtcvad) detects speech boundaries in real-time; flushes on silence rather than fixed intervals
 - 📊 **Session statistics** - Duration, segments, word count and dropped chunks at end of session
-- ⌨️ **Full keyboard control** - Pause, save, switch model, switch language, change mode on-the-fly
+- ⌨️ **Full keyboard control** - Pause, save, switch model, and change mode on-the-fly
 - 💾 **Markdown export** - Save timestamped bilingual transcripts with session stats
-- 🔧 **Zero configuration** - Auto-installs dependencies in isolated venv
-- ⚡ **GPU acceleration** - Experimental NVIDIA/CUDA support via `--gpu` (3-5x faster, falls back to CPU on failure)
-- 🐧 **Linux native** - Works with PipeWire/PulseAudio
+- 🔧 **uv project** - Dependencies are declared in `pyproject.toml` and installed with `uv sync`
+- ⚡ **GPU acceleration** - Uses an NVIDIA GPU automatically when CUDA is available; `--cpu` forces the CPU
+- 🐧 **Linux native** - Captures PipeWire playback, including Chrome
 - 🎛️ **Smart audio source selection** - Auto-detects active stream, interactive menu when multiple sources are active
-- 🇮🇹 **Bilingual display** - Toggle Italian source text visibility
+- 🇨🇳 **Bilingual display** - Toggle Chinese source text visibility
 
 ## Privacy
 
@@ -52,13 +66,10 @@ This tool is safe to use in environments where confidentiality matters (internal
 ## Requirements
 
 - **OS**: Linux (tested on Fedora 43, Ubuntu 24.04, openSUSE Tumbleweed)
-- **Python**: 3.9+ (3.11 recommandé)
-- **Audio**: PulseAudio or **PipeWire** (modern Linux distributions)
-- **Packages**: `python3-venv`, `python3-devel` / `python311-devel` (needed to compile `webrtcvad`)
+- **Python**: 3.12+ (this checkout is pinned to the system Python, currently 3.14)
+- **Audio**: PipeWire (`pw-dump` and `pw-record`, included with PipeWire)
 
-**Note**: Most modern Linux distributions (Fedora 34+, Ubuntu 22.10+, Debian 12+) 
-use PipeWire as the default audio server. The script works seamlessly with both 
-PipeWire and legacy PulseAudio systems through the `pactl`/`parec` compatibility layer.
+**Note**: The translator listens to the output device that is actually playing audio, so a Chrome tab does not need a separate monitor source.
 
 ## Installation
 
@@ -66,20 +77,20 @@ PipeWire and legacy PulseAudio systems through the `pactl`/`parec` compatibility
 
 **Fedora / RHEL / CentOS:**
 ```bash
-sudo dnf install python3-venv python3-devel pulseaudio-utils
+sudo dnf install pipewire
 ```
 
 **openSUSE:**
 ```bash
-sudo zypper install python3-venv python311-devel pulseaudio-utils
+sudo zypper install pipewire
 ```
 
 **Ubuntu / Debian:**
 ```bash
-sudo apt install python3-venv python3-dev pulseaudio-utils
+sudo apt install pipewire
 ```
 
-> `pulseaudio-utils` provides `pactl` and `parec`, which are required for audio capture under both PulseAudio and PipeWire.
+> PipeWire provides `pw-dump` and `pw-record`, which capture the audio an application is playing.
 
 ### 2. Clone and run
 
@@ -88,82 +99,61 @@ sudo apt install python3-venv python3-dev pulseaudio-utils
 git clone https://github.com/stephdl/live-voice-translate.git
 cd live-voice-translate
 
-# Run (first run auto-installs Python dependencies)
-./lvt.py
+# Create .venv and install the dependencies from pyproject.toml
+uv sync
+
+# Run
+uv run lvt
 ```
 
-> **If your system Python is older than 3.9** (e.g. openSUSE with Python 3.6), the script
-> auto-detects a compatible version in `/usr/bin` and re-launches itself automatically.
-> If auto-detection fails, launch manually:
-> ```bash
-> python3.11 ./lvt.py
-> ```
-
-**First run** creates virtualenv in `~/.local/share/live-voice-translate/venv` and installs:
-- faster-whisper
-- argostranslate
-- webrtcvad
-
-This takes 2-3 minutes.
+`uv sync` installs `faster-whisper`, `argostranslate`, and `webrtcvad` into `.venv`.
 
 ### 3. Updating
 
 ```bash
 cd live-voice-translate
 git pull origin main
+uv sync
 ```
-
-New Python dependencies (if any) are installed automatically on the next run.
-
-> If you get unexpected errors after an update, delete the virtualenv to force a clean reinstall:
-> ```bash
-> rm -rf ~/.local/share/live-voice-translate/venv
-> ./lvt.py
-> ```
 
 ## Usage
 
 ### Interactive menu
 ```bash
-./lvt.py
+uv run lvt
 ```
 
-Select model (1-5), then start playing audio in another window.
+Select model (1-6), then start playing Chinese audio in another window. Press
+Enter to use the recommended `large-v3-turbo` model.
 
 ### Command-line
 ```bash
-# Medium model (recommended)
-./lvt.py medium
+# Turbo model (recommended)
+uv run lvt turbo
 
 # Large model with slow mode (best quality)
-./lvt.py large --slow
+uv run lvt large --slow
 
 # Tiny model with fast mode (lowest latency)
-./lvt.py tiny --fast
+uv run lvt tiny --fast
 
 # Save transcript to file
-./lvt.py medium --save meeting.md
+uv run lvt medium --save meeting.md
 
 # Auto-generated filename
-./lvt.py medium --save
+uv run lvt medium --save
 
-# Display Italian + English
-./lvt.py medium --show-italian
+# Display Chinese + English
+uv run lvt turbo --show-chinese
 
-# Translate to French (via it→en→fr double translation)
-./lvt.py medium --to fr
-
-# Translate to Spanish
-./lvt.py medium --to es
-
-# Translate to German
-./lvt.py medium --to de
+# Mixed Chinese/English speech: Chinese is translated, English is shown as is
+uv run lvt turbo --mixed --show-chinese
 
 # Disable Voice Activity Detection (transcribe everything including silence)
-./lvt.py medium --no-vad
+uv run lvt medium --no-vad
 
-# Enable GPU acceleration (NVIDIA/CUDA only, experimental)
-./lvt.py medium --gpu
+# GPU is used automatically on NVIDIA. Force the CPU with:
+uv run lvt medium --cpu
 ```
 
 ### Keyboard shortcuts
@@ -175,9 +165,8 @@ Select model (1-5), then start playing audio in another window.
 | **P** | Pause/Resume translation |
 | **S** | Save transcript now (creates file if needed) |
 | **M** | Change mode (fast → normal → slow → fast) |
-| **W** | Change Whisper model (tiny → base → small → medium → large-v3) |
-| **L** | Change target language (en → fr → es → de → en) |
-| **I** | Toggle Italian display (ON/OFF) |
+| **W** | Change Whisper model (tiny → base → small → medium → turbo → large-v3) |
+| **I** | Toggle Chinese display (ON/OFF) |
 | **Q** | Quit gracefully |
 | **H** | Show session config + keyboard shortcuts help |
 
@@ -190,7 +179,8 @@ Select model (1-5), then start playing audio in another window.
 | **tiny** | 60% | ~1.5s | 1GB | Quick tests, low-end systems |
 | **base** | 85% | ~4s | 1.5GB | Fast casual listening |
 | **small** | 90% | ~5s | 2GB | Good balance |
-| **medium** | 95% | ~8s | 5GB | **Recommended** for most uses |
+| **medium** | 95% | ~8s | 5GB | Good CPU balance |
+| **large-v3-turbo** | High | Varies | Varies | **Recommended for live translation** |
 | **large-v3** | 98% | ~12s | 10GB | Maximum accuracy (high CPU/fan) |
 
 ## Speed modes
@@ -211,29 +201,29 @@ Change mode on-the-fly by pressing **M** during execution.
 [14:25:45] ▶ What happened?
 ```
 
-### Bilingual (Italian + English)
+### Bilingual (Chinese + English)
 ```bash
-./lvt.py medium --show-italian
+uv run lvt turbo --show-chinese
 ```
 ```
-[14:25:30] Oggi è stata una giornata difficile     (green)
-[14:25:30] ▶ Today was a tough day
+[14:25:30] 今天是艰难的一天。                        (green)
+[14:25:30] ▶ Today was a difficult day.
 
-[14:25:45] Cosa è successo?                        (green)
+[14:25:45] 发生了什么？                            (green)
 [14:25:45] ▶ What happened?
 ```
 
-Toggle Italian display during execution with **I** key.
+Toggle Chinese display during execution with **I** key.
 
 ## Examples
 
 ### Translate YouTube video
 ```bash
 # Start translator
-./lvt.py medium
+uv run lvt medium
 
 # In another window/tab, open YouTube
-firefox "https://www.youtube.com/watch?v=ITALIAN_VIDEO_ID"
+firefox "https://www.youtube.com/watch?v=CHINESE_VIDEO_ID"
 
 # Translations appear in real-time in terminal
 ```
@@ -241,7 +231,7 @@ firefox "https://www.youtube.com/watch?v=ITALIAN_VIDEO_ID"
 ### Translate video call
 ```bash
 # Start with save
-./lvt.py medium --save meeting.md
+uv run lvt medium --save meeting.md
 
 # Join video call (Zoom, Teams, Google Meet, Discord, etc.)
 # Translations saved to meeting.md
@@ -250,16 +240,16 @@ firefox "https://www.youtube.com/watch?v=ITALIAN_VIDEO_ID"
 # - Press 'p' to pause (e.g., when speaking)
 # - Press 'p' again to resume
 # - Press 's' to force save
-# - Press 'i' to show Italian text
+# - Press 'i' to show Chinese text
 ```
 
 ### Compare models
 ```bash
 # Test tiny (fastest)
-./lvt.py tiny --fast
+uv run lvt tiny --fast
 
 # Test large (best quality)
-./lvt.py large --slow
+uv run lvt large --slow
 ```
 
 ## Output format
@@ -272,11 +262,11 @@ firefox "https://www.youtube.com/watch?v=ITALIAN_VIDEO_ID"
 [14:25:45] ▶ What happened?
 ```
 
-**Bilingual (with `--show-italian` or `i` key):**
+**Bilingual (with `--show-chinese` or `i` key):**
 ```
-[14:25:30] Oggi è stata una giornata difficile
-[14:25:30] ▶ Today was a tough day
-[14:25:45] Cosa è successo?
+[14:25:30] 今天是艰难的一天。
+[14:25:30] ▶ Today was a difficult day.
+[14:25:45] 发生了什么？
 [14:25:45] ▶ What happened?
 ```
 
@@ -292,7 +282,7 @@ firefox "https://www.youtube.com/watch?v=ITALIAN_VIDEO_ID"
 
 **[14:25:30]**
 
-🇮🇹 *Oggi è stata una giornata difficile*
+🇨🇳 *今天是艰难的一天。*
 
 🇬🇧 Today was a tough day
 
@@ -300,7 +290,7 @@ firefox "https://www.youtube.com/watch?v=ITALIAN_VIDEO_ID"
 
 **[14:25:45]**
 
-🇮🇹 *Cosa è successo?*
+🇨🇳 *发生了什么？*
 
 🇬🇧 What happened?
 
@@ -314,7 +304,7 @@ firefox "https://www.youtube.com/watch?v=ITALIAN_VIDEO_ID"
 
 ## Audio source selection
 
-The tool auto-detects active audio monitor streams. If only one is active, it is selected automatically. If multiple streams are active simultaneously (e.g. a video call and a YouTube video), an interactive menu is displayed:
+The tool finds output devices that currently have playing audio, such as a Chrome tab. If only one device is playing, it is selected automatically. If several devices are playing, an interactive menu is displayed:
 
 ```
   Multiple audio streams detected:
@@ -325,14 +315,14 @@ The tool auto-detects active audio monitor streams. If only one is active, it is
   Select stream (1-2):
 ```
 
-PipeWire internal loopback sinks are automatically filtered out.
+PipeWire internal loopback sinks are skipped.
 
 ## How it works
 
-1. **Audio source**: Auto-detects active PulseAudio/PipeWire monitor stream, with interactive selection when multiple are available
+1. **Audio source**: Finds the PipeWire output device that is playing audio, with a menu when more than one device is playing
 2. **VAD chunking**: webrtcvad detects speech/silence boundaries and flushes each utterance when silence exceeds the mode threshold (500/800/1200ms)
-3. **Transcription**: Whisper converts Italian audio to text
-4. **Translation**: Argos Translate converts Italian → English, then English → target language if needed (fr/es/de)
+3. **Transcription**: Whisper converts Mandarin audio to Chinese text (`language="zh"`)
+4. **Translation**: Argos Translate converts Chinese directly to English (`zh→en`)
 5. **Display**: Shows timestamped translations in terminal
 6. **Save**: Optionally exports to Markdown file
 
@@ -346,75 +336,39 @@ PipeWire internal loopback sinks are automatically filtered out.
 ### No active audio stream detected
 
 ```bash
-# 1. Check if PulseAudio/PipeWire is running
-pactl info
-# Should show server info
+# Show which applications are playing audio
+wpctl status
 
-# 2. List all audio sources
-pactl list short sources
-
-# 3. Look for monitor sources (with RUNNING status)
-pactl list short sources | grep monitor
-
-# 4. If no monitor source is RUNNING:
-# - Play audio (YouTube, music, etc.)
-# - Run the check again
-pactl list short sources | grep -E "monitor.*RUNNING"
-
-# 5. If still no output, restart audio service
-pactl info
-
-# Output PipeWire :
-# Server Name: PulseAudio (on PipeWire 0.3.xx)
-
-# Output PulseAudio :
-# Server Name: pulseaudio
-
-systemctl --user restart pipewire pipewire-pulse  # For PipeWire
-systemctl --user restart pulseaudio                # For PulseAudio
-```
-
-**Still not working?**
-
-Check if audio is actually playing:
-```bash
-# Monitor audio levels in real-time
-pavucontrol  # GUI tool - check "Recording" tab
-
-# Or command-line
-pactl subscribe  # Shows audio events
+# Restart PipeWire if playback devices are missing
+systemctl --user restart pipewire wireplumber
 ```
 
 ---
 
-### First run fails
+### Dependency install fails
 ```bash
-# Install system dependencies (python*-devel is required to compile webrtcvad)
-sudo dnf install python3-venv python3-devel      # Fedora/RHEL
-sudo zypper install python3-venv python311-devel # openSUSE (adjust version if needed)
-sudo apt install python3-venv python3-dev        # Ubuntu/Debian
+# webrtcvad may need Python headers and a compiler if no wheel is available
+sudo apt install python3-dev build-essential   # Ubuntu/Debian
+sudo dnf install python3-devel gcc             # Fedora/RHEL
+sudo zypper install python3-devel gcc          # openSUSE
 
-# Retry
-./lvt.py
+uv sync
 ```
 
-### Delete and reinstall virtualenv
+### Recreate the environment
 ```bash
-# Remove virtualenv
-rm -rf ~/.local/share/live-voice-translate/
-
-# Rerun (recreates clean venv)
-./lvt.py
+rm -rf .venv
+uv sync
 ```
 
 ### Keyboard shortcuts not working
 
 Shortcuts require terminal in TTY mode. If piping output or running in non-interactive environment, use `--no-keyboard`:
 ```bash
-./lvt.py medium --no-keyboard
+uv run lvt medium --no-keyboard
 ```
 
-### Italian text not displaying correctly
+### Chinese text not displaying correctly
 
 Ensure your terminal uses UTF-8 encoding:
 ```bash
@@ -432,21 +386,21 @@ export LC_ALL=fr_FR.UTF-8
 - **CPU usage**: Use smaller models (tiny/base) on weak hardware
 - **Latency**: Use `--fast` (500ms silence, 6s max chunk) for lowest delay — may cut mid-sentence
 - **Accuracy**: Use `large --slow` (1200ms silence, 12s max chunk, max beam) for best quality
-- **Balance**: `medium` (default normal mode) is the best CPU/quality tradeoff
+- **Balance**: `turbo` (default normal mode) is the best live speed/quality tradeoff
 - **RAM**: medium model needs ~5GB, large needs ~10GB
-- **GPU (NVIDIA)**: Use `--gpu` for 3-5x faster transcription — requires CUDA drivers. Falls back to CPU automatically on failure. AMD is not supported (CTranslate2 has no ROCm build).
+- **GPU (NVIDIA)**: Used automatically when CUDA is available. `--cpu` forces CPU transcription. If GPU startup fails, transcription falls back to the CPU.
 
 ## Advanced usage
 
 ### Custom save filename
 ```bash
-./lvt.py medium --save "$(date +%Y%m%d)-meeting.md"
+uv run lvt medium --save "$(date +%Y%m%d)-meeting.md"
 ```
 
 ### Create save file during execution
 ```bash
 # Start without --save
-./lvt.py medium
+uv run lvt medium
 
 # During execution, press 's'
 # Creates: live-translate-YYYYMMDD-HHMMSS.md
@@ -488,19 +442,17 @@ Contributions welcome! Please:
 Potential future features:
 
 - [x] VAD-based real-time chunking (webrtcvad) — flushes on silence, phrase by phrase
-- [x] Multiple target languages (French, Spanish, German) via double translation
+- [x] Direct offline Chinese→English translation
 - [x] Smart audio source selection with interactive menu for multiple streams
 - [x] GPU acceleration (experimental, NVIDIA/CUDA only, auto-fallback to CPU)
 - [x] Session statistics - Duration, segments, word count, dropped chunks
 - [x] On-the-fly model switching (W key) without restarting
-- [x] On-the-fly language switching (L key) without restarting
 - [x] Markdown export with session stats and bilingual transcript
 - [ ] Multiple translators (DeepL/GPT fallback)
 - [ ] Bidirectional mode (IT+EN simultaneously)
 - [ ] Speaker diarization
 - [ ] Web dashboard
 - [ ] Export formats (PDF, DOCX, SRT subtitles)
-- [x] Support for other language pairs (French, Spanish, German via double translation)
 - [ ] Migrate VAD from [webrtcvad](https://github.com/wiseman/py-webrtcvad) (unmaintained since 2018) to a maintained alternative — Silero VAD investigated but requires PyTorch or has ONNX API instability; RMS energy-based VAD is a viable lightweight option
 
 ## Acknowledgments
