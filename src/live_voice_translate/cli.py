@@ -113,7 +113,7 @@ def translate(
     ] = False,
     no_vad: Annotated[
         bool,
-        _flag("Disable Whisper's internal VAD filter (webrtcvad chunking is always active)"),
+        _flag("Disable Whisper's internal VAD filter (Silero chunking is always active)"),
     ] = False,
     no_keyboard: Annotated[bool, _flag("Disable keyboard shortcuts")] = False,
 ) -> None:

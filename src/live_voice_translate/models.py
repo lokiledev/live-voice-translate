@@ -34,7 +34,7 @@ class ModelConfig:
     """Whisper settings tuned for live Chinese speech."""
 
     # vad_silence_ms: silence that ends an utterance
-    # vad_aggressiveness: webrtcvad level, 0 permissive through 3 aggressive
+    # vad_aggressiveness: Silero threshold, 0 permissive through 3 aggressive
     # max_speech_ms: force-flush after this long even without silence
     # beam: Whisper beam search width
     CONFIGS: ClassVar[dict[str, dict[str, ModeSettings]]] = {

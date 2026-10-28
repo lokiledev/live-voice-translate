@@ -23,9 +23,10 @@ from live_voice_translate.cuda import cuda_device_name
 from live_voice_translate.keyboard import KeyboardController
 from live_voice_translate.languages import SOURCE_LANG, TARGET_LANG
 from live_voice_translate.models import ModelConfig, ModeSettings
-from live_voice_translate.native import WhisperModel, webrtcvad
+from live_voice_translate.native import WhisperModel
 from live_voice_translate.text import clean_hallucination_loops, is_chinese
 from live_voice_translate.transcript import TranscriptWriter
+from live_voice_translate.vad import WINDOW_SAMPLES, SileroVad, frames_for
 
 if TYPE_CHECKING:
     from live_voice_translate.overlay import Overlay
@@ -138,14 +139,12 @@ class LiveTranslator:
 
     def _audio_capture_loop(self, source_name: str) -> None:
         """Read the monitor continuously and queue utterances split by silence."""
-        sample_rate = 16000
-        frame_ms = 30
-        frame_bytes = sample_rate * frame_ms // 1000 * 2
-        pre_padding_frames = 300 // frame_ms
-        min_speech_frames = 500 // frame_ms
+        frame_bytes = WINDOW_SAMPLES * 2
+        pre_padding_frames = frames_for(300)
+        min_speech_frames = frames_for(500)
 
         current_aggressiveness = self.config["vad_aggressiveness"]
-        vad = webrtcvad.Vad(current_aggressiveness)
+        vad = SileroVad(current_aggressiveness)
 
         proc: subprocess.Popen[bytes] | None = None
         ring_buffer: collections.deque[bytes] = collections.deque(maxlen=pre_padding_frames)
@@ -181,6 +180,7 @@ class LiveTranslator:
                     voiced_frames = []
                     ring_buffer.clear()
                     silence_count = 0
+                    vad.reset()
                     proc = start_recorder()
                     continue
 
@@ -189,18 +189,16 @@ class LiveTranslator:
                     voiced_frames = []
                     ring_buffer.clear()
                     silence_count = 0
+                    vad.reset()
                     continue
 
                 new_aggressiveness = self.config["vad_aggressiveness"]
                 if new_aggressiveness != current_aggressiveness:
                     current_aggressiveness = new_aggressiveness
-                    vad = webrtcvad.Vad(current_aggressiveness)
-                silence_frames = self.config["vad_silence_ms"] // frame_ms
+                    vad.set_aggressiveness(current_aggressiveness)
+                silence_frames = frames_for(self.config["vad_silence_ms"])
 
-                try:
-                    is_speech = vad.is_speech(frame, sample_rate)
-                except Exception:
-                    is_speech = False
+                is_speech = vad.is_speech(frame, in_speech=in_speech)
 
                 if not in_speech:
                     ring_buffer.append(frame)
@@ -221,10 +219,10 @@ class LiveTranslator:
                             silence_count = 0
                     else:
                         silence_count = 0
-                        max_speech_frames = self.config["max_speech_ms"] // frame_ms
+                        max_speech_frames = frames_for(self.config["max_speech_ms"])
                         if len(voiced_frames) >= max_speech_frames:
                             self._enqueue_audio(b"".join(voiced_frames))
-                            overlap_frames = 500 // frame_ms
+                            overlap_frames = frames_for(500)
                             voiced_frames = list(voiced_frames[-overlap_frames:])
         except Exception as exc:
             if not self.should_quit:

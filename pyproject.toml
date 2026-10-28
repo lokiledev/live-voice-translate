@@ -14,7 +14,7 @@ dependencies = [
     "numpy>=2.0",
     # CTranslate2 wheels link against CUDA 12 cuBLAS
     "nvidia-cublas-cu12>=12.4; sys_platform == 'linux'",
-    "webrtcvad>=2.0.10",
+    "onnxruntime>=1.16.1",
     "cyclopts>=5.3.2",
 ]
 
@@ -37,6 +37,8 @@ packages = ["src/live_voice_translate"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/live_voice_translate/py.typed" = "live_voice_translate/py.typed"
+"src/live_voice_translate/assets/silero_vad.onnx" = "live_voice_translate/assets/silero_vad.onnx"
+"src/live_voice_translate/assets/LICENSE.silero-vad" = "live_voice_translate/assets/LICENSE.silero-vad"
 
 [tool.ty.environment]
 python-version = "3.14"

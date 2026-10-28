@@ -42,7 +42,7 @@ sometimes a straightforward Python script is all you need.
 - 🎤 **Real-time translation** - Mandarin Chinese to English, phrase by phrase
 - 🎯 **6 Whisper models** - From tiny (fast) to large-v3 (accurate), including recommended large-v3-turbo
 - ⚡ **3 speed modes** - Fast (500ms)/Normal (800ms)/Slow (1200ms) silence thresholds, switchable on-the-fly with **M**
-- 🔇 **VAD-based chunking** - [webrtcvad](https://github.com/wiseman/py-webrtcvad) detects speech boundaries in real-time; flushes on silence rather than fixed intervals
+- 🔇 **VAD-based chunking** - [Silero VAD](https://github.com/snakers4/silero-vad) v6 runs on CPU and flushes each phrase when silence exceeds the mode threshold
 - 📊 **Session statistics** - Duration, segments, word count and dropped chunks at end of session
 - ⌨️ **Full keyboard control** - Pause, save, switch model, and change mode on-the-fly
 - 💾 **Markdown export** - Save timestamped bilingual transcripts with session stats
@@ -335,7 +335,7 @@ PipeWire internal loopback sinks are skipped.
 ## How it works
 
 1. **Audio source**: Finds the PipeWire output device that is playing audio, with a menu when more than one device is playing
-2. **VAD chunking**: webrtcvad detects speech/silence boundaries and flushes each utterance when silence exceeds the mode threshold (500/800/1200ms)
+2. **VAD chunking**: Silero VAD v6 (ONNX Runtime, CPU) detects speech and flushes each utterance when silence exceeds the mode threshold (500/900/1200ms)
 3. **Transcription**: Whisper converts Mandarin audio to Chinese text (`language="zh"`)
 4. **Translation**: Argos Translate converts Chinese directly to English (`zh→en`)
 5. **Display**: Shows timestamped translations in terminal
@@ -356,18 +356,6 @@ wpctl status
 
 # Restart PipeWire if playback devices are missing
 systemctl --user restart pipewire wireplumber
-```
-
----
-
-### Dependency install fails
-```bash
-# webrtcvad may need Python headers and a compiler if no wheel is available
-sudo apt install python3-dev build-essential   # Ubuntu/Debian
-sudo dnf install python3-devel gcc             # Fedora/RHEL
-sudo zypper install python3-devel gcc          # openSUSE
-
-uv sync
 ```
 
 ### Recreate the environment
@@ -456,7 +444,7 @@ Contributions welcome! Please:
 
 Potential future features:
 
-- [x] VAD-based real-time chunking (webrtcvad) — flushes on silence, phrase by phrase
+- [x] VAD-based real-time chunking (Silero VAD v6, CPU) — flushes on silence, phrase by phrase
 - [x] Direct offline Chinese→English translation
 - [x] Smart audio source selection with interactive menu for multiple streams
 - [x] GPU acceleration (experimental, NVIDIA/CUDA only, auto-fallback to CPU)
@@ -468,13 +456,14 @@ Potential future features:
 - [ ] Speaker diarization
 - [ ] Web dashboard
 - [ ] Export formats (PDF, DOCX, SRT subtitles)
-- [ ] Migrate VAD from [webrtcvad](https://github.com/wiseman/py-webrtcvad) (unmaintained since 2018) to a maintained alternative — Silero VAD investigated but requires PyTorch or has ONNX API instability; RMS energy-based VAD is a viable lightweight option
+- [x] Replace unmaintained webrtcvad with Silero VAD v6 on CPU (ONNX Runtime)
 
 ## Acknowledgments
 
 - [Whisper](https://github.com/openai/whisper) by OpenAI
 - [faster-whisper](https://github.com/guillaumekln/faster-whisper) by Guillaume Klein
 - [Argos Translate](https://github.com/argosopentech/argos-translate) by Argos Open Technologies
+- [Silero VAD](https://github.com/snakers4/silero-vad) by the Silero Team
 
 ## Support
 
