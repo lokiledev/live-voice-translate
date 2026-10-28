@@ -129,13 +129,14 @@ uv run ty check
 
 ## Usage
 
-### Interactive menu
+### Default model
+
+`lvt` loads `turbo` (`large-v3-turbo`) unless you pass another model name.
+
 ```bash
 uv run lvt
+uv run lvt --overlay
 ```
-
-Select model (1-6), then start playing Chinese audio in another window. Press
-Enter to use the recommended `large-v3-turbo` model.
 
 ### Command-line
 ```bash
